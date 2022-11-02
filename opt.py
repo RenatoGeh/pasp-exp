@@ -3,6 +3,7 @@ import sys
 import math
 import random
 
+import matplotlib.pyplot as plt
 import clingo
 import pasp
 
@@ -125,7 +126,8 @@ def ll(R: list):
 def ll_from(n: int, pr: list, full: bool = False):
   return ll(pasp.exact(pasp.parse(create_pasp(n, pr = pr, full = full), from_str = True), psemantics = "maxent"))
 
-def learn(D: list, n: int, theta: list = None, n_iters: int = 1, H: list = None) -> list:
+def learn(D: list, n: int, theta: list = None, n_iters: int = 1, H: list = None, \
+          debug: bool = False) -> list:
   """
   Learn using the softmax derivation as an inference:
 
@@ -139,8 +141,7 @@ def learn(D: list, n: int, theta: list = None, n_iters: int = 1, H: list = None)
   W = [0 for _ in range(m)]
   C = count(D)
   k = len(D)
-  if H is not None:
-    H.append(W)
+  if H is not None: H.append(theta.copy())
   for it in range(n_iters):
     for i in range(m):
       W[i] = 0
@@ -150,9 +151,8 @@ def learn(D: list, n: int, theta: list = None, n_iters: int = 1, H: list = None)
         t = p / q
         W[i] += t*C[O]
       W[i] /= k
-    if H is not None:
-      H.append(W)
-    print(W)
+    if H is not None: H.append(W.copy())
+    if debug: print(W)
     theta = W.copy()
   return theta
 
@@ -166,7 +166,7 @@ def softmax(W: list) -> list:
 
 
 def learn_neurasp(D: list, n: int, theta: list = None, n_iters: int = 1, H: list = None, \
-                  eta: float = 0.01) -> list:
+                  eta: float = 0.01, debug: bool = False) -> list:
   """
   Learn using NeurASP's derivation.
   """
@@ -178,6 +178,7 @@ def learn_neurasp(D: list, n: int, theta: list = None, n_iters: int = 1, H: list
   C = count(D)
   ones = [1 for j in range(m-1)]
   W = theta.copy()
+  if H is not None: H.append(theta.copy())
 
   for it in range(n_iters):
     for O in C:
@@ -189,11 +190,12 @@ def learn_neurasp(D: list, n: int, theta: list = None, n_iters: int = 1, H: list
         o = prob_obs(R, O, theta, atoms, N)
         W[i] += C[O]*eta*(p-q)/o
     for i in range(m): theta[i] = W[i]
-    print(theta)
+    if H is not None: H.append(theta.copy())
+    if debug: print(theta)
   return theta
 
 def learn_lagrange(D: list, n: int, theta: list = None, n_iters: int = 1, H: list = None, \
-                   eta: float = 0.1) -> list:
+                   eta: float = 0.1, debug: bool = False) -> list:
   m = n+1
   if theta is None: theta = [1/m for _ in range(m)]
   atoms = [f"insomnia{i}" for i in range(m)]
@@ -203,6 +205,7 @@ def learn_lagrange(D: list, n: int, theta: list = None, n_iters: int = 1, H: lis
   ones = [1 for j in range(m-1)]
   W = theta.copy()
   f = 1/m
+  if H is not None: H.append(theta.copy())
 
   for it in range(n_iters):
     for O in C:
@@ -214,5 +217,79 @@ def learn_lagrange(D: list, n: int, theta: list = None, n_iters: int = 1, H: lis
         o = prob_obs(R, O, theta, atoms, N)
         W[i] += C[O]*eta*((1-f)*p-f*q)/o
     for i in range(m): theta[i] = W[i]
-    print(theta)
+    if H is not None: H.append(theta.copy())
+    if debug: print(theta)
   return theta
+
+def history_2d(n: int, p: list, n_iters: int = 30, eta: float = 0.01):
+  D = [val2obs(x) for x in sample(1, n, p)]
+  H_inf, H_neurasp, H_lagrange = [], [], []
+  learn(D, 1, n_iters = n_iters, H = H_inf)
+  learn_neurasp(D, 1, n_iters = n_iters, H = H_neurasp, eta = eta)
+  learn_lagrange(D, 1, n_iters = n_iters, H = H_lagrange, eta = eta)
+  f = lambda h, i: [e for e in map(lambda t: t[i], h)]
+  X = [f(H_inf, 0), f(H_neurasp, 0), f(H_lagrange, 0)]
+  Y = [f(H_inf, 1), f(H_neurasp, 1), f(H_lagrange, 1)]
+  return X, Y
+
+def history_3d(n: int, p: list, n_iters: int = 30, eta: float = 0.01):
+  D = [val2obs(x) for x in sample(2, n, p)]
+  H_inf, H_neurasp, H_lagrange = [], [], []
+  learn(D, 2, n_iters = n_iters, H = H_inf)
+  learn_neurasp(D, 2, n_iters = n_iters, H = H_neurasp, eta = eta)
+  learn_lagrange(D, 2, n_iters = n_iters, H = H_lagrange, eta = eta)
+  f = lambda h, i: [e for e in map(lambda t: t[i], h)]
+  X = [f(H_inf, 0), f(H_neurasp, 0), f(H_lagrange, 0)]
+  Y = [f(H_inf, 1), f(H_neurasp, 1), f(H_lagrange, 1)]
+  Z = [f(H_inf, 2), f(H_neurasp, 2), f(H_lagrange, 2)]
+  return X, Y, Z
+
+def plot_2d(n: int, p: list, n_iters: int = 30, eta = 0.01):
+  ax = plt.figure().add_subplot(projection = "3d")
+  ax.set_xlabel("# iterations")
+  ax.set_ylabel("ℙ(insomnia0)")
+  ax.set_zlabel("ℙ(insomnia1)")
+  ax.set_ylim(0, 1)
+  ax.set_zlim(0, 1)
+
+  X, Y = history_2d(n, p, n_iters = n_iters, eta = eta)
+  k = len(X)
+  I = [[x for x in range(n_iters+1)] for _ in range(k)]
+  T = ["blue", "red", "green"]
+  L = ["Inference", "NeurASP", "Lagrange"]
+
+  import numpy as np
+
+  for i in range(k):
+    ax.plot3D(I[i], X[i], Y[i], T[i], label = L[i])
+  ax.plot3D(I[i], np.array([p[0] for _ in range(n_iters+1)]), \
+            np.array([1-p[0] for _ in range(n_iters+1)]), "gray", alpha = 0.7, label = "gray")
+
+  ax.legend()
+  plt.show()
+  return X, Y
+
+def plot_3d(n: int, p: list, n_iters: int = 30, eta = 0.01):
+  ax = plt.figure().add_subplot(projection = "3d")
+  ax.set_xlabel("# iterations")
+  ax.set_ylabel("ℙ(insomnia0)")
+  ax.set_zlabel("ℙ(insomnia1)")
+  ax.set_ylim(0, 1)
+  ax.set_zlim(0, 1)
+
+  X, Y, Z = history_3d(n, p, n_iters = n_iters, eta = eta)
+  k = len(X)
+  I = [[x for x in range(n_iters+1)] for _ in range(k)]
+  T = ["blue", "red", "green"]
+  L = ["Inference", "NeurASP", "Lagrange"]
+
+  import numpy as np
+
+  for i in range(k):
+    ax.plot3D(I[i], X[i], Y[i], T[i], label = L[i])
+  ax.plot3D(I[i], np.array([p[0] for _ in range(n_iters+1)]), \
+            np.array([p[1] for _ in range(n_iters+1)]), "gray", alpha = 0.7, label = "gray")
+
+  ax.legend()
+  plt.show()
+  return X, Y, Z

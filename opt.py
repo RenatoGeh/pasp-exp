@@ -26,24 +26,31 @@ def create(n: int, pr: list = None, full: bool = False) -> str:
     P += f"{round(1.0-sum(pr), ndigits = 10)}::insomnia{n}."
   return P
 
-def create_pasp(n: int, pr: list, full: bool = False) -> str:
+def create_pasp(n: int, pr: list, full: bool = False, marg: bool = False) -> str:
   P = create(n, pr = pr, full = full) + "\n\n"
-  for x in itertools.product([False, True], repeat = 2*n):
-    P += "#query("
-    for i in range(0, len(x), 2):
-      P += f"{'' if x[i] else 'not '}sleep{i//2}, {'' if x[i+1] else 'not '}work{i//2}" + \
-        (", " if i < len(x)-2 else "")
-    P += ").\n"
+  if marg:
+    for i in range(n):
+      P += f"#query(sleep{i}).\n"
+  else:
+    for x in itertools.product([False, True], repeat = 2*n):
+      P += "#query("
+      for i in range(0, len(x), 2):
+        P += f"{'' if x[i] else 'not '}sleep{i//2}, {'' if x[i+1] else 'not '}work{i//2}" + \
+          (", " if i < len(x)-2 else "")
+      P += ").\n"
   return P
 
-def sample(n: int, m: int, pr: list) -> list:
+def sample(n: int, m: int, pr: list, marg: bool = False) -> list:
   """ Samples m "work" and "sleep" atoms from the n-insomnia program. """
-  P = create_pasp(n, pr)
+  P = create_pasp(n, pr, marg = marg)
   R = [x[0] for x in pasp.exact(pasp.parse(P, from_str = True), psemantics = "maxent")]
   D = []
-  for i, x in enumerate(itertools.product([False, True], repeat = 2*n)):
-    k = round(m*R[i])
-    D.extend([x]*k)
+  if marg:
+    for i, p in enumerate(R): D.extend([f"sleep{i}"]*round(m*p))
+  else:
+    for i, x in enumerate(itertools.product([False, True], repeat = 2*n)):
+      k = round(m*R[i])
+      D.extend([x]*k)
   return D
 
 def val2text(x: tuple) -> str:
@@ -71,13 +78,17 @@ def val2dict(x: tuple) -> dict:
     X[f"work{j}"] = x[i+1]
   return X
 
-def val2obs(x: tuple) -> list:
+def val2obs(x: tuple, marg: bool = False) -> list:
+  if marg: return [x]
   X = []
   for i in range(0, len(x), 2):
     j = i // 2
     if x[i]: X.append(f"sleep{j}")
     if x[i+1]: X.append(f"work{j}")
   return X
+
+def dataset(n: int, p: list, marg: bool = False):
+  return [val2obs(x, marg = marg) for x in sample(len(p), n, p, marg = marg)]
 
 def undef_atom_ignore(x, y):
   if x == clingo.MessageCode.AtomUndefined: return
@@ -188,8 +199,15 @@ def learn_neurasp(D: list, n: int, theta: list = None, n_iters: int = 1, H: list
         q = prob_obs(R, O, ones, [atoms[j] for j in range(m) if j != i], \
                      [N[j] for j in range(m) if j != i])
         o = prob_obs(R, O, theta, atoms, N)
-        W[i] += C[O]*eta*(p-q)/o
+        #d = min(1, max(-1, (p-q)/o))
+        W[i] += C[O]*eta*((p-q)/o)
     for i in range(m): theta[i] = W[i]
+    #theta = softmax(W)
+    # s = 0.0
+    # for i in range(m):
+      # if W[i] > 0: s += W[i]
+    # for i in range(m): theta[i] = W[i]/s if W[i] > 0 else 0
+    # W = theta.copy()
     if H is not None: H.append(theta.copy())
     if debug: print(theta)
   return theta
@@ -222,7 +240,7 @@ def learn_lagrange(D: list, n: int, theta: list = None, n_iters: int = 1, H: lis
   return theta
 
 def history_2d(n: int, p: list, n_iters: int = 30, eta: float = 0.01):
-  D = [val2obs(x) for x in sample(1, n, p)]
+  D = dataset(n, p)
   H_inf, H_neurasp, H_lagrange = [], [], []
   learn(D, 1, n_iters = n_iters, H = H_inf)
   learn_neurasp(D, 1, n_iters = n_iters, H = H_neurasp, eta = eta)
@@ -233,6 +251,7 @@ def history_2d(n: int, p: list, n_iters: int = 30, eta: float = 0.01):
   return X, Y
 
 def history_3d(n: int, p: list, n_iters: int = 30, eta: float = 0.01):
+  D = dataset(n, p)
   D = [val2obs(x) for x in sample(2, n, p)]
   H_inf, H_neurasp, H_lagrange = [], [], []
   learn(D, 2, n_iters = n_iters, H = H_inf)
@@ -288,7 +307,7 @@ def plot_3d(n: int, p: list, n_iters: int = 30, eta = 0.01):
   for i in range(k):
     ax.plot3D(I[i], X[i], Y[i], T[i], label = L[i])
   ax.plot3D(I[i], np.array([p[0] for _ in range(n_iters+1)]), \
-            np.array([p[1] for _ in range(n_iters+1)]), "gray", alpha = 0.7, label = "gray")
+            np.array([p[1] for _ in range(n_iters+1)]), "gray", alpha = 0.7, label = "Target")
 
   ax.legend()
   plt.show()
